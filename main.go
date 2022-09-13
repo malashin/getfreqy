@@ -290,6 +290,7 @@ func normalize(input []uint32) []float64 {
 	return normalized
 }
 
+// Credit to https://github.com/atercattus/fennec-tiny
 func buildSpectrogram(wave []float64) (spectrogram [][]float64, err error) {
 	waveLen := len(wave)
 	if waveLen == 0 {
