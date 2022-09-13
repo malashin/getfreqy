@@ -18,18 +18,24 @@ import (
 	"github.com/3d0c/gmf"
 	"github.com/mjibson/go-dsp/fft"
 	"github.com/mjibson/go-dsp/window"
+	"golang.org/x/image/draw"
 )
 
 var (
 	flagInput         = flag.String("i", "", "the input path")
 	flagStreamN       = flag.Int("s", -1, "stream number")
-	flagVerbose       = flag.Bool("v", false, "ffmpeg debug loglevel")
+	flagVerbose       = flag.Bool("v", false, "verbose output")
+	flagDebug         = flag.Bool("d", false, "ffmpeg debug loglevel")
 	flagTimer         = flag.Bool("t", false, "print out elapsed time at the end")
 	flagSaveImage     = flag.Bool("h", false, "save histogram image")
-	flagMagnitudeMult = flag.Float64("m", 0.1, "max magnitude multipler used for max hz value calculation")
+	flagMagnitudeMult = flag.Float64("m", 0.07, "max magnitude multipler used for max hz value calculation")
+	flagFFTWinSize    = flag.Int("f", 2048, "FFT windows size, must be a power of two")
 	sampleFmt         = gmf.AV_SAMPLE_FMT_S32
 	sampleSize        = 4
+	FFTHalfWinSize    = *flagFFTWinSize / 2
 )
+
+const ()
 
 type stream struct {
 	decCodec        *gmf.Codec
@@ -43,15 +49,22 @@ func main() {
 	// Parse flags
 	flag.Parse()
 
+	// Adjust flags after parsing
+	FFTHalfWinSize = *flagFFTWinSize / 2
+	if *flagDebug {
+		*flagVerbose = true
+	}
+
 	// Usage
 	if *flagInput == "" {
-		fmt.Println("Usage: <binary path> -i <input path>")
+		fmt.Println("Usage: getfreqy -i <input path> [options]")
+		flag.PrintDefaults()
 		return
 	}
 
 	// Set ffmpeg log level
 	gmf.LogSetLevel(gmf.AV_LOG_FATAL)
-	if *flagVerbose {
+	if *flagDebug {
 		gmf.LogSetLevel(gmf.AV_LOG_DEBUG)
 	}
 
@@ -83,7 +96,7 @@ func main() {
 	}
 
 	if *flagTimer {
-		fmt.Println(time.Since(start))
+		fmt.Printf("%v\n", time.Since(start))
 	}
 }
 
@@ -277,33 +290,24 @@ func normalize(input []uint32) []float64 {
 	return normalized
 }
 
-const (
-	// Размер окна FFT
-	FFTWinSize = 2048
-	// Величина перекрывания окон FFT
-	FFTOverlap = FFTWinSize / 2
-	// Половина ширины окна FFT
-	FFTHalfWinSize = FFTWinSize / 2
-)
-
 func buildSpectrogram(wave []float64) (spectrogram [][]float64, err error) {
 	waveLen := len(wave)
 	if waveLen == 0 {
 		return
 	}
 
-	winFunc := window.Hann(FFTWinSize + 2)[1 : FFTWinSize+1]
+	winFunc := window.Hann(*flagFFTWinSize + 2)[1 : *flagFFTWinSize+1]
 
 	spectrogram = make([][]float64, FFTHalfWinSize+1) // rows x cols
 
-	win := make([]float64, FFTWinSize)
-	winZeroes := make([]float64, FFTWinSize)
+	win := make([]float64, *flagFFTWinSize)
+	winZeroes := make([]float64, *flagFFTWinSize)
 
-	stride := FFTWinSize - FFTOverlap
+	stride := *flagFFTWinSize - FFTHalfWinSize
 	winCnt := (waveLen + stride - 1) / stride
 	for winIdx, offs := 0, 0; winIdx < winCnt; winIdx, offs = winIdx+1, offs+stride {
-		idx := minInt(waveLen, offs+FFTWinSize)
-		if idx < (offs + FFTWinSize) {
+		idx := minInt(waveLen, offs+*flagFFTWinSize)
+		if idx < (offs + *flagFFTWinSize) {
 			copy(win, winZeroes)
 		}
 
@@ -425,6 +429,13 @@ func visualizeSpectre(spectre [][]float64, redLineRow int) image.Image {
 				img.Set(x, y, pix)
 			}
 		}
+	}
+
+	// Downscale image if it's too big
+	if img.Bounds().Max.X > 3840 {
+		dst := image.NewRGBA(image.Rect(0, 0, img.Bounds().Max.X/2, img.Bounds().Max.Y/2))
+		draw.BiLinear.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+		return dst
 	}
 
 	return img
